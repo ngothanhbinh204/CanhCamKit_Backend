@@ -1,7 +1,7 @@
 # 📐 BẢN THIẾT KẾ THEME CANHCAM (CANHCAM THEME BLUEPRINT)
 
 > **Phạm vi áp dụng:** Bộ quy chuẩn cấu trúc, mô hình dữ liệu và nguyên tắc kỹ thuật dùng lại cho **MỌI DỰ ÁN** WordPress theme của CanhCam.  
-> **Kit version:** 2.2.0 (xem `KIT_VERSION`; quy trình điều phối nằm trong `AGENTS.md`)
+> **Kit version:** 2.3.0 (xem `KIT_VERSION`; quy trình điều phối nằm trong `AGENTS.md`)
 > **Cập nhật:** 2026-11-07  
 
 ---

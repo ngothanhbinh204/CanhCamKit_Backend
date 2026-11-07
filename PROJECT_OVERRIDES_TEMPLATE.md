@@ -1,6 +1,6 @@
 # Project overrides
 
-> Kit version: `2.2.0`. Copy thành `PROJECT_OVERRIDES.md` ở gốc theme và điền từ code/việc đã duyệt. Ô `[chưa chốt]` là điều kiện chặn bước ACF/code phụ thuộc; không tự lấy ví dụ Blueprint làm giá trị.
+> Kit version: `2.3.0`. Copy thành `PROJECT_OVERRIDES.md` ở gốc theme và điền từ code/việc đã duyệt. Ô `[chưa chốt]` là điều kiện chặn bước ACF/code phụ thuộc; không tự lấy ví dụ Blueprint làm giá trị.
 
 | Quyết định | Giá trị dự án | Nguồn xác nhận |
 |---|---|---|

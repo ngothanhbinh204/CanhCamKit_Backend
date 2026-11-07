@@ -1,6 +1,6 @@
 # Bàn giao page: [page-slug]
 
-> Kit version: `2.2.0`. Copy thành `handoffs/[page-slug].md` tại gốc theme. Main agent ghi Đầu vào, Mapping đã duyệt và Review từ stdout. ACF builder/coder chỉ ghi mục được giao. Lệch `KIT_VERSION` thì dừng page để đồng bộ.
+> Kit version: `2.3.0`. Copy thành `handoffs/[page-slug].md` tại gốc theme. Main agent ghi Đầu vào, Mapping đã duyệt và Review từ stdout. ACF builder/coder chỉ ghi mục được giao. Lệch `KIT_VERSION` thì dừng page để đồng bộ.
 
 ## Đầu vào và phạm vi
 

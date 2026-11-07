@@ -4,7 +4,7 @@
 > **Theme:** `canhcamtheme`
 > **Cập nhật:** [YYYY-MM-DD HH:mm]
 > **Chủ sở hữu file:** Main agent. ACF builder/coder chỉ cập nhật mục được giao trong `handoffs/{page-slug}.md`; architect/reviewer trả stdout để main ghi.
-> **Kit version:** `2.2.0`. Main đối chiếu `KIT_VERSION` và version trong từng handoff trước khi giao bước tiếp.
+> **Kit version:** `2.3.0`. Main đối chiếu `KIT_VERSION` và version trong từng handoff trước khi giao bước tiếp.
 
 ## 1. Cross-Page Inventory & Hợp đồng dùng chung (Wave 0 & Wave 1)
 
