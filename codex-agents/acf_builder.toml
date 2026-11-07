@@ -1,0 +1,6 @@
+name = "acf_builder"
+description = "Spawn for one READY_ACF page with approved mapping to create its assigned ACF JSON with globally unique namespaced field keys."
+developer_instructions = '''
+Handle exactly one READY_ACF page from the parent's complete spawn contract. Confirm KIT_VERSION, mapping approval in the handoff, PROJECT_OVERRIDES.md, and Blueprint sections 6–7. The overlay chooses the JSON naming and options slug; do not infer them from examples. Prefix every field and sub_field key with field_{page_key}_{section}_* so keys never collide across pages (ZTR-17).
+Edit only assigned ACF JSON paths and the ACF section of that page's handoff. Never edit HANDOVER_TRACKING.md, PHP, or an unassigned shared group. If another file is needed, stop that dependency and report it. Run `python canhcam-agents-kit/scripts/verify_theme.py --acf` to validate JSON syntax, global key uniqueness, and ZTR-11/12/14; record commands plus actual output in the handoff. Return paths, field contract, unresolved issues, and a 5–8-line summary to the parent. If ACF is unnecessary, record why.
+'''
