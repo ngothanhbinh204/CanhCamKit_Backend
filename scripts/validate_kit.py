@@ -13,6 +13,12 @@ ROLES = {
     "wp-coder": {"read_file", "write_file", "edit_file", "run_command"},
     "wp-reviewer": {"read_file", "run_command"},
 }
+ROLE_SHARDS = {
+    "wp-architect": "architecture.md",
+    "acf-builder": "acf-schema.md",
+    "wp-coder": "php-contracts.md",
+    "wp-reviewer": "codemap.py",
+}
 REQUIRED = (
     "AGENTS.md",
     "CANHCAM_THEME_BLUEPRINT.md",
@@ -27,6 +33,8 @@ REQUIRED_SCRIPTS = (
     "scripts/validate_kit.py",
     "scripts/verify_theme.py",
     "scripts/install_kit.py",
+    "scripts/kitlib.py",
+    "scripts/codemap.py",
     "install.ps1",
     "install.sh",
 )
@@ -81,6 +89,9 @@ def main() -> None:
             raise ValueError(f"{path}: invalid command policy")
         if tools != expected_tools:
             raise ValueError(f"{path}: unexpected tools {tools ^ expected_tools}")
+        body = path.read_text(encoding="utf-8")
+        if ROLE_SHARDS[name] not in body:
+            raise ValueError(f"{path}: missing codemap shard reference '{ROLE_SHARDS[name]}'")
 
     for name in ("wp_architect", "acf_builder", "wp_coder", "wp_reviewer"):
         path = ROOT / "codex-agents" / f"{name}.toml"
@@ -90,7 +101,10 @@ def main() -> None:
         if "sandbox_mode" in data:
             raise ValueError(f"{path}: sandbox_mode cannot override parent")
 
-    print(f"CanhCam kit {VERSION}: 4 Antigravity + 4 Codex agents + install_kit.py + verify_theme.py validated")
+    print(
+        f"CanhCam kit {VERSION}: 4 Antigravity + 4 Codex agents + "
+        f"install_kit.py + verify_theme.py + codemap.py validated"
+    )
 
 
 if __name__ == "__main__":
