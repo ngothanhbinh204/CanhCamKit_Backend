@@ -4,14 +4,14 @@
 
 ## Nguồn sự thật và phạm vi đọc
 
-- Code/theme hiện tại, HTML nguồn và quyết định người dùng là nguồn sự thật. Thứ tự đọc: `PROJECT_OVERRIDES.md` → `CODEMAP.md` → shard liên quan trong `.ai-map/shards/` → file code/HTML thật; nếu thiếu quyết định cần cho bước hiện tại thì hỏi, không lấy giá trị ví dụ trong Blueprint làm cấu hình dự án. Bản đồ (`CODEMAP.md`, `.ai-map/`) chỉ là **chỉ mục điều hướng**, không phải nguồn sự thật.
-- `CANHCAM_THEME_BLUEPRINT.md` chứa **một** schema mapping/ACF, chuẩn code, bảo toàn DOM và bảng ZTR. Đọc đúng mục: architect §2 (nhất là §2.3), §3.1 khi có taxonomy phân cấp, §6.2; ACF builder §6–7; coder §2.1, §8–9 và mục khác khi liên quan; reviewer §11 cùng `PROJECT_VARIANTS.md` nếu có. Không chép Blueprint vào prompt hay file agent.
-- `HANDOVER_TRACKING.md`, `CODEMAP.md` và `.ai-map/` **chỉ main ghi** (main cập nhật bản đồ qua `python canhcam-agents-kit/scripts/codemap.py build`). Worker chỉ được đọc bản đồ hoặc chạy `codemap.py check/query/impact`. Mỗi page có `handoffs/{page-slug}.md` theo `PAGE_HANDOFF_TEMPLATE.md`. Main ghi đầu vào, mapping đã duyệt và Review từ stdout; ACF builder/coder chỉ ghi đúng mục của mình sau khi được giao.
+- Code/theme hiện tại, HTML nguồn và quyết định người dùng là nguồn sự thật. Đọc `PROJECT_OVERRIDES.md` trước Blueprint; nếu thiếu quyết định cần cho bước hiện tại thì hỏi, không lấy giá trị ví dụ trong Blueprint làm cấu hình dự án.
+- `CANHCAM_THEME_BLUEPRINT.md` chứa **một** schema mapping/ACF, chuẩn code, bảo toàn DOM và bảng ZTR. Đọc đúng mục: architect §2 (nhất là §2.3), §3.1 khi có taxonomy phân cấp, §6.2, trích xuất CF7 markup §8.6 khi page có form; ACF builder §6–7; coder §2.1, §8–9 (gồm bảo toàn DOM/JS §8.5, helper render CF7 kèm form class §8.6); reviewer §11 (19 ZTR, nhất là ZTR-18 DOM Parity & ZTR-19 CF7 form class) cùng `PROJECT_VARIANTS.md` nếu có. Không chép Blueprint vào prompt hay file agent.
+- `HANDOVER_TRACKING.md` là bảng tổng, **chỉ main sửa**. Mỗi page có `handoffs/{page-slug}.md` theo `PAGE_HANDOFF_TEMPLATE.md`. Main ghi đầu vào, mapping đã duyệt và Review từ stdout; ACF builder/coder chỉ ghi đúng mục của mình sau khi được giao.
 
 ## Quy trình 3 Wave & State machine đa trang
 
-1. **Wave 0 — Cross-Page Inventory & Code Graph:** Trước khi bóc tách từng page lẻ, main chạy `python canhcam-agents-kit/scripts/codemap.py build` và `python canhcam-agents-kit/scripts/verify_theme.py --inventory` để sinh bản đồ điều hướng, nhận diện các khối xuất hiện ở $\ge 2$ trang (Tầng 1 Global / Tầng 2 Shared) và danh sách CPT/Taxonomy/Card (Tầng 3). Ghi vào bảng **Hợp đồng dùng chung** trong `HANDOVER_TRACKING.md`.
-2. **Wave 1 — Foundation First:** Chốt và triển khai trước các thành phần dùng chung (`inc/function-post-types.php`, Options, `header.php`, `footer.php`, `modules/common/`, `template-parts/shared/`, `template-parts/cards/`, ACF group chung) để khóa interface contract (`wp_parse_args`), rồi chạy lại `codemap.py build`.
+1. **Wave 0 — Cross-Page Inventory:** Trước khi bóc tách từng page lẻ, main chạy `python canhcam-agents-kit/scripts/verify_theme.py --inventory` (hoặc quét `<section` toàn bộ `UI/*.html`) để nhận diện các khối xuất hiện ở $\ge 2$ trang (Tầng 1 Global / Tầng 2 Shared) và danh sách CPT/Taxonomy/Card (Tầng 3). Ghi vào bảng **Hợp đồng dùng chung** trong `HANDOVER_TRACKING.md`.
+2. **Wave 1 — Foundation First:** Chốt và triển khai trước các thành phần dùng chung (`inc/function-post-types.php`, Options, `header.php`, `footer.php`, `modules/common/`, `template-parts/shared/`, `template-parts/cards/`, ACF group chung) để khóa interface contract (`wp_parse_args`).
 3. **Wave 2 — Multi-Page Parallel Pipeline:** Từng page chạy theo state machine:
    `TODO → MAPPING → WAITING_APPROVAL → READY_ACF → ACF → READY_CODING → CODING → READY_REVIEW → REVIEW → DONE`; `BLOCKED` ghi điều kiện mở khóa, `REWORK` quay về owner của lỗi rồi review lại.
 
@@ -31,11 +31,10 @@ Vai trò và bước: [tên native; MAPPING/ACF/CODING/REVIEW]
 Page và HTML: [slug; UI/....html]
 Handoff: handoffs/[slug].md; mục [Mapping/ACF/Code/Review]; ghi file hay stdout-only
 Được sửa: [danh sách path chính xác hoặc “không file”]
-Cấm: [file/nhóm file ngoài allowlist, nhất là HANDOVER_TRACKING.md, CODEMAP.md, .ai-map/ và file chung]
+Cấm: [file/nhóm file ngoài allowlist, nhất là HANDOVER_TRACKING.md và file chung]
 Quyết định đã duyệt: [nội dung hoặc “chưa, chỉ phân tích”]
 Phụ thuộc chung: [CPT/taxonomy/banner/card/shared section đã chốt, file nguồn]
 ACF namespace: [group_page_{page_key}; tiền tố field_{page_key}_{section}_*]
-Bản đồ: CODEMAP.md và .ai-map/shards/[architecture|acf-schema|php-contracts].md
 Đọc Blueprint: [mục cụ thể] và PROJECT_OVERRIDES.md
 Xong: [đầu ra, lệnh kiểm tra thực tế, 5–8 dòng tóm tắt cho main]
 ```
@@ -44,6 +43,6 @@ Codex gọi tên TOML `wp_architect`, `acf_builder`, `wp_coder`, `wp_reviewer`; 
 
 ## Bằng chứng và hoàn tất
 
-Reviewer đối chiếu §11 trên file thật (tuyệt đối không dùng `CODEMAP.md` hay `.ai-map/` làm bằng chứng `[PASS]`), chạy `php -l` trên từng PHP đã đụng, chạy `python canhcam-agents-kit/scripts/verify_theme.py` (kiểm tra cú pháp JSON, trùng lặp `field_key`/`group_key` toàn cục, ZTR JSON và đối chiếu section HTML ↔ PHP), chạy `python canhcam-agents-kit/scripts/codemap.py check` (bản đồ cũ chỉ cảnh báo, không chặn `DONE`) và quét các mẫu cấm theo `PROMPT_PLAYBOOK.md`. Ghi lệnh, output và phạm vi. Không có output lệnh thì ghi `[NOT RUN]`, không `[PASS]`; edge case cần WordPress runtime mà chưa chạy cũng ghi `[NOT RUN]`. Main không đánh `DONE` khi kiểm tra bắt buộc còn `[NOT RUN]`.
+Reviewer đối chiếu §11 (19 ZTR), chạy `php -l` trên từng PHP đã đụng, chạy `python canhcam-agents-kit/scripts/verify_theme.py` (kiểm tra cú pháp JSON, trùng lặp `field_key`/`group_key` toàn cục, ZTR JSON và đối chiếu section HTML ↔ PHP) và quét các mẫu cấm theo `PROMPT_PLAYBOOK.md` (nhất là ZTR-19 cấm `do_shortcode` thô khi form có class). Ghi lệnh, output và phạm vi. Không có output lệnh thì ghi `[NOT RUN]`, không `[PASS]`; edge case cần WordPress runtime mà chưa chạy cũng ghi `[NOT RUN]`. Main không đánh `DONE` khi kiểm tra bắt buộc còn `[NOT RUN]`.
 
 Chỉ main đổi `UI/{name}.html` thành `UI/Done-{name}.html` sau review `[PASS]` có bằng chứng và khi không worker nào còn đọc file đó. Không đổi tên chỉ để báo tiến độ.
