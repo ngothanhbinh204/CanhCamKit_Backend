@@ -1,11 +1,11 @@
 # CanhCam agent rules
 
-> Kit version: `2.2.0`. Khi cài hoặc nâng cấp, chạy `python canhcam-agents-kit/scripts/install_kit.py` (hoặc `--upgrade`) để tự động bung file ra **gốc theme/git root** cùng `KIT_VERSION`; thư mục `canhcam-agents-kit/` chỉ là nguồn phân phối. Nếu version trong handoff khác `KIT_VERSION`, dừng page đó và nhờ main chạy `install_kit.py --upgrade` để đồng bộ tài liệu.
+> Kit version: `2.3.0`. Khi cài hoặc nâng cấp, chạy `python canhcam-agents-kit/scripts/install_kit.py` (hoặc `--upgrade`) để tự động bung file ra **gốc theme/git root** cùng `KIT_VERSION`; thư mục `canhcam-agents-kit/` chỉ là nguồn phân phối. Nếu version trong handoff khác `KIT_VERSION`, dừng page đó và nhờ main chạy `install_kit.py --upgrade` để đồng bộ tài liệu.
 
 ## Nguồn sự thật và phạm vi đọc
 
 - Code/theme hiện tại, HTML nguồn và quyết định người dùng là nguồn sự thật. Đọc `PROJECT_OVERRIDES.md` trước Blueprint; nếu thiếu quyết định cần cho bước hiện tại thì hỏi, không lấy giá trị ví dụ trong Blueprint làm cấu hình dự án.
-- `CANHCAM_THEME_BLUEPRINT.md` chứa **một** schema mapping/ACF, chuẩn code, bảo toàn DOM và bảng ZTR. Đọc đúng mục: architect §2 (nhất là §2.3), §3.1 khi có taxonomy phân cấp, §6.2; ACF builder §6–7; coder §2.1, §8–9 và mục khác khi liên quan; reviewer §11 cùng `PROJECT_VARIANTS.md` nếu có. Không chép Blueprint vào prompt hay file agent.
+- `CANHCAM_THEME_BLUEPRINT.md` chứa **một** schema mapping/ACF, chuẩn code, bảo toàn DOM và bảng ZTR. Đọc đúng mục: architect §2 (nhất là §2.3), §3.1 khi có taxonomy phân cấp, §6.2, trích xuất CF7 markup §8.6 khi page có form; ACF builder §6–7; coder §2.1, §8–9 (gồm bảo toàn DOM/JS §8.5, helper render CF7 kèm form class §8.6); reviewer §11 (19 ZTR, nhất là ZTR-18 DOM Parity & ZTR-19 CF7 form class) cùng `PROJECT_VARIANTS.md` nếu có. Không chép Blueprint vào prompt hay file agent.
 - `HANDOVER_TRACKING.md` là bảng tổng, **chỉ main sửa**. Mỗi page có `handoffs/{page-slug}.md` theo `PAGE_HANDOFF_TEMPLATE.md`. Main ghi đầu vào, mapping đã duyệt và Review từ stdout; ACF builder/coder chỉ ghi đúng mục của mình sau khi được giao.
 
 ## Quy trình 3 Wave & State machine đa trang
@@ -43,6 +43,6 @@ Codex gọi tên TOML `wp_architect`, `acf_builder`, `wp_coder`, `wp_reviewer`; 
 
 ## Bằng chứng và hoàn tất
 
-Reviewer đối chiếu §11, chạy `php -l` trên từng PHP đã đụng, chạy `python canhcam-agents-kit/scripts/verify_theme.py` (kiểm tra cú pháp JSON, trùng lặp `field_key`/`group_key` toàn cục, ZTR JSON và đối chiếu section HTML ↔ PHP) và quét các mẫu cấm theo `PROMPT_PLAYBOOK.md`. Ghi lệnh, output và phạm vi. Không có output lệnh thì ghi `[NOT RUN]`, không `[PASS]`; edge case cần WordPress runtime mà chưa chạy cũng ghi `[NOT RUN]`. Main không đánh `DONE` khi kiểm tra bắt buộc còn `[NOT RUN]`.
+Reviewer đối chiếu §11 (19 ZTR), chạy `php -l` trên từng PHP đã đụng, chạy `python canhcam-agents-kit/scripts/verify_theme.py` (kiểm tra cú pháp JSON, trùng lặp `field_key`/`group_key` toàn cục, ZTR JSON và đối chiếu section HTML ↔ PHP) và quét các mẫu cấm theo `PROMPT_PLAYBOOK.md` (nhất là ZTR-19 cấm `do_shortcode` thô khi form có class). Ghi lệnh, output và phạm vi. Không có output lệnh thì ghi `[NOT RUN]`, không `[PASS]`; edge case cần WordPress runtime mà chưa chạy cũng ghi `[NOT RUN]`. Main không đánh `DONE` khi kiểm tra bắt buộc còn `[NOT RUN]`.
 
 Chỉ main đổi `UI/{name}.html` thành `UI/Done-{name}.html` sau review `[PASS]` có bằng chứng và khi không worker nào còn đọc file đó. Không đổi tên chỉ để báo tiến độ.

@@ -1,6 +1,6 @@
 # CanhCam Pipeline Playbook
 
-> Kit version `2.2.0`. State machine, Wave 0/1/2, quyền sửa file và cổng duyệt nằm trong `AGENTS.md`; schema mapping, ACF, DOM Parity và 18 ZTR nằm trong Blueprint. Prompt dưới đây dùng cho **main agent** ở gốc theme sau khi cài kit.
+> Kit version `2.3.0`. State machine, Wave 0/1/2, quyền sửa file và cổng duyệt nằm trong `AGENTS.md`; schema mapping, ACF, DOM Parity và 19 ZTR nằm trong Blueprint. Prompt dưới đây dùng cho **main agent** ở gốc theme sau khi cài kit.
 
 ## 0.1 — Khởi tạo, quét Cross-Page Inventory & migrate tracking (Wave 0)
 
@@ -27,7 +27,7 @@ Codex spawn theo tên wp_architect, acf_builder, wp_coder, wp_reviewer. Antigrav
 Main điền **đủ tất cả dòng** từ file thực tế; không gửi toàn bộ chat cha. Worker thiếu đầu vào thì dừng và hỏi main.
 
 ```text
-Kit version: 2.2.0 (đối chiếu KIT_VERSION và handoff)
+Kit version: 2.3.0 (đối chiếu KIT_VERSION và handoff)
 Vai trò và bước: [tên native]; [MAPPING/ACF/CODING/REVIEW]
 Page và HTML: [slug]; UI/[TenTrang].html
 Handoff: handoffs/[slug].md; mục [Mapping/ACF/Code/Review]; [stdout-only hoặc ghi mục]
@@ -44,10 +44,10 @@ Xong: [đầu ra đúng mục, lệnh kiểm tra thực tế, 5–8 dòng tóm t
 
 | Vai trò | Chỉ nhận khi | Đầu ra | Quyền ghi |
 |---|---|---|---|
-| Architect | `MAPPING`, HTML tồn tại | Bảng 5 cột Blueprint §2.3, DOM/JS hooks, câu hỏi, dependency | stdout-only; main ghi Mapping |
+| Architect | `MAPPING`, HTML tồn tại | Bảng 5 cột Blueprint §2.3, DOM/JS hooks, CF7 Tag Markup (nếu có form), câu hỏi, dependency | stdout-only; main ghi Mapping |
 | ACF builder | `READY_ACF`, mapping đã duyệt, overlay đủ | JSON (key có tiền tố `field_{page_key}_*`) + output `verify_theme.py --acf` | JSON được giao và mục ACF |
-| Coder | `READY_CODING`, ACF contract có hoặc ghi không áp dụng | PHP/JS + output `php -l` & `verify_theme.py --html ... --php ...` | file được giao và mục Code |
-| Reviewer | `READY_REVIEW`, diff và handoff đủ | kết quả 18 ZTR + output lệnh + `[NOT RUN]` khi cần | stdout-only; main ghi Review |
+| Coder | `READY_CODING`, ACF contract có hoặc ghi không áp dụng | PHP/JS (dùng `canhcam_render_cf7_shortcode` cho form CF7 §8.6) + output `php -l` & `verify_theme.py --html ... --php ...` | file được giao và mục Code |
+| Reviewer | `READY_REVIEW`, diff và handoff đủ | kết quả 19 ZTR (nhất là ZTR-18 DOM & ZTR-19 form class) + output lệnh + `[NOT RUN]` khi cần | stdout-only; main ghi Review |
 
 ## Evidence gate của reviewer
 
@@ -60,6 +60,7 @@ python canhcam-agents-kit/scripts/verify_theme.py --html <UI/Page.html> --php <c
 rg 'query_posts\(' -g '*.php' <phạm-vi>
 rg '<img ' -g '*.php' <phạm-vi>
 rg 'the_post_thumbnail' -g '*.php' <phạm-vi>
+rg 'do_shortcode\(' -g '*.php' <phạm-vi>  # ZTR-19: Form CF7 bắt buộc gọi qua canhcam_render_cf7_shortcode
 ```
 
 `rg` exit 1 nghĩa là không thấy mẫu; ghi cả exit code. Kiểm tra Cold Start, media bị xóa, URL `?paged=999999`, taxonomy rỗng hoặc AJAX cần WordPress runtime: chỉ ghi đã chạy nếu có bước tái hiện và output thực tế. Nếu còn `[NOT RUN]` ở kiểm tra bắt buộc, main giữ `BLOCKED`/`REVIEW`, không `DONE`.

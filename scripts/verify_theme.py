@@ -2,44 +2,22 @@
 
 from __future__ import annotations
 
+import sys
+
+sys.dont_write_bytecode = True
+
 import argparse
 from collections import defaultdict
-import glob
 import json
 from pathlib import Path
-import re
-import sys
-from typing import Any
 
-
-SECTION_RE = re.compile(r"<section\b[^>]*\bclass=[\"']\s*([^\s\"']+)", re.I)
-TEMPLATE_PART_RE = re.compile(r"get_template_part\(\s*['\"]([^'\"]+)['\"]")
-
-
-def find_theme_root() -> Path:
-    cwd = Path.cwd()
-    if (cwd / "style.css").is_file() or (cwd / "acf-json").is_dir():
-        return cwd
-    script_root = Path(__file__).resolve().parents[2]
-    return script_root
-
-
-def iter_acf_fields(fields: list[dict[str, Any]], parent_path: str = "") -> list[tuple[str, dict[str, Any]]]:
-    collected: list[tuple[str, dict[str, Any]]] = []
-    for field in fields or []:
-        if not isinstance(field, dict):
-            continue
-        label = field.get("name") or field.get("label") or field.get("key") or "unknown"
-        cur_path = f"{parent_path}.{label}" if parent_path else str(label)
-        collected.append((cur_path, field))
-        if isinstance(field.get("sub_fields"), list):
-            collected.extend(iter_acf_fields(field["sub_fields"], cur_path))
-        if isinstance(field.get("layouts"), list):
-            for layout in field["layouts"]:
-                if isinstance(layout, dict) and isinstance(layout.get("sub_fields"), list):
-                    l_name = layout.get("name") or layout.get("key") or "layout"
-                    collected.extend(iter_acf_fields(layout["sub_fields"], f"{cur_path}[{l_name}]"))
-    return collected
+from kitlib import (
+    SECTION_RE,
+    TEMPLATE_PART_RE,
+    find_theme_root,
+    iter_acf_fields,
+    resolve_php_files,
+)
 
 
 def check_acf(theme_root: Path) -> int:
@@ -146,32 +124,6 @@ def run_inventory(theme_root: Path) -> int:
         tier = "Tier 1/2 (Global/Shared)" if len(files) >= 2 else "Tier 4 (Page-Specific)"
         print(f"{cls:<36} | {len(files):<5} | {tier:<22} | {', '.join(files)}")
     return 0
-
-
-def resolve_php_files(theme_root: Path, php_patterns: list[str]) -> list[Path]:
-    resolved: list[Path] = []
-    visited: set[Path] = set()
-
-    for pattern in php_patterns:
-        matches = glob.glob(str(theme_root / pattern), recursive=True) or glob.glob(pattern, recursive=True)
-        for match in matches:
-            p = Path(match).resolve()
-            if p.is_file() and p not in visited:
-                visited.add(p)
-                resolved.append(p)
-
-    queue = list(resolved)
-    while queue:
-        current = queue.pop(0)
-        text = current.read_text(encoding="utf-8", errors="ignore")
-        for slug in TEMPLATE_PART_RE.findall(text):
-            candidate = (theme_root / f"{slug}.php").resolve()
-            if candidate.is_file() and candidate not in visited:
-                visited.add(candidate)
-                resolved.append(candidate)
-                queue.append(candidate)
-
-    return resolved
 
 
 def check_parity(theme_root: Path, html_arg: str, php_patterns: list[str]) -> int:

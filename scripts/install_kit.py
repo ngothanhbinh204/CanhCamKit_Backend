@@ -105,24 +105,40 @@ def copy_file(src: Path, dst: Path, dry_run: bool, actions: list[str]) -> None:
         shutil.copy2(src, dst)
 
 
-def ensure_gitignore(theme_root: Path, kit_folder_name: str, dry_run: bool, actions: list[str]) -> None:
+def ensure_gitignore(theme_root: Path, entries: list[str], dry_run: bool, actions: list[str]) -> None:
     gitignore = theme_root / ".gitignore"
-    entry = f"{kit_folder_name}/"
-    if gitignore.is_file():
-        lines = [line.strip() for line in gitignore.read_text(encoding="utf-8", errors="ignore").splitlines()]
-        if entry in lines or kit_folder_name in lines or f"/{kit_folder_name}" in lines or f"/{entry}" in lines:
+    file_existed = gitignore.is_file()
+    existing_lines: list[str] = []
+    if file_existed:
+        existing_lines = [
+            line.strip() for line in gitignore.read_text(encoding="utf-8", errors="ignore").splitlines()
+        ]
+
+    missing: list[str] = []
+    for entry in entries:
+        bare = entry.rstrip("/")
+        variants = {entry, bare, f"/{entry}", f"/{bare}"}
+        if any(v in existing_lines for v in variants):
             actions.append(f"  [OK]          .gitignore (đã có '{entry}')")
-            return
-        actions.append(f"  [UPDATE]      .gitignore (thêm '{entry}')")
-        if not dry_run:
+        else:
+            missing.append(entry)
+            tag = "[UPDATE]" if (file_existed or len(missing) > 1) else "[CREATE]"
+            actions.append(f"  {tag:<13} .gitignore (thêm '{entry}')")
+
+    if missing and not dry_run:
+        header = "# CanhCam Agents Kit & AI Code Map"
+        block_lines: list[str] = []
+        if header not in existing_lines:
+            block_lines.append(header)
+        block_lines.extend(missing)
+        block_text = "\n".join(block_lines) + "\n"
+        if file_existed:
             with gitignore.open("a", encoding="utf-8") as f:
-                if lines and lines[-1] != "":
+                if existing_lines and existing_lines[-1] != "":
                     f.write("\n")
-                f.write(f"# CanhCam Agents Kit source repo\n{entry}\n")
-    else:
-        actions.append(f"  [CREATE]      .gitignore (thêm '{entry}')")
-        if not dry_run:
-            gitignore.write_text(f"# CanhCam Agents Kit source repo\n{entry}\n", encoding="utf-8")
+                f.write(block_text)
+        else:
+            gitignore.write_text(block_text, encoding="utf-8")
 
 
 def main() -> int:
@@ -154,7 +170,7 @@ def main() -> int:
     parser.add_argument(
         "--no-gitignore",
         action="store_true",
-        help="Không tự động thêm canhcam-agents-kit/ vào .gitignore của theme",
+        help="Không tự động thêm canhcam-agents-kit/, .ai-map/, CODEMAP.md vào .gitignore của theme",
     )
     parser.add_argument(
         "--dry-run",
@@ -232,12 +248,30 @@ def main() -> int:
 
     # Step 4: Git Hygiene (.gitignore)
     if not args.no_gitignore and KIT_ROOT.parent == theme_root:
-        ensure_gitignore(theme_root, KIT_ROOT.name, args.dry_run, actions)
+        gitignore_entries = [f"{KIT_ROOT.name}/", ".ai-map/", "CODEMAP.md"]
+        ensure_gitignore(theme_root, gitignore_entries, args.dry_run, actions)
+
+    # Step 5: Build Group C (Code Graph: CODEMAP.md + .ai-map/)
+    if args.dry_run:
+        actions.append("  [WOULD BUILD] CODEMAP")
+    else:
+        codemap_script = KIT_ROOT / "scripts" / "codemap.py"
+        cm_res = subprocess.run(
+            [sys.executable, str(codemap_script), "build", "--root", str(theme_root)],
+            cwd=str(theme_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        if cm_res.returncode == 0:
+            actions.append(f"  [BUILD-MAP]   {(theme_root / 'CODEMAP.md').as_posix()} & .ai-map/")
+        else:
+            actions.append(f"  [WARN]        codemap.py build cảnh báo: {(cm_res.stdout + cm_res.stderr).strip()}")
 
     for line in actions:
         print(line)
 
-    # Step 5: Auto-Inventory if UI/ exists
+    # Step 6: Auto-Inventory if UI/ exists
     ui_dir = theme_root / "UI"
     if ui_dir.is_dir() and list(ui_dir.glob("*.html")):
         print("-" * 65)
@@ -254,7 +288,7 @@ def main() -> int:
     print("-" * 65)
     print("HOÀN TẤT! Bước tiếp theo:")
     print("  1. Mở phiên làm việc mới của Antigravity / Codex tại thư mục gốc của theme.")
-    print("  2. Kiểm tra `PROJECT_OVERRIDES.md` và chạy Prompt 0.1 trong `PROMPT_PLAYBOOK.md`.")
+    print("  2. Kiểm tra `PROJECT_OVERRIDES.md`, `CODEMAP.md` và chạy Prompt 0.1 trong `PROMPT_PLAYBOOK.md`.")
     return 0
 
 

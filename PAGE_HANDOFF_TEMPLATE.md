@@ -1,6 +1,6 @@
 # Bàn giao page: [page-slug]
 
-> Kit version: `2.2.0`. Copy thành `handoffs/[page-slug].md` tại gốc theme. Main agent ghi Đầu vào, Mapping đã duyệt và Review từ stdout. ACF builder/coder chỉ ghi mục được giao. Lệch `KIT_VERSION` thì dừng page để đồng bộ.
+> Kit version: `2.3.0`. Copy thành `handoffs/[page-slug].md` tại gốc theme. Main agent ghi Đầu vào, Mapping đã duyệt và Review từ stdout. ACF builder/coder chỉ ghi mục được giao. Lệch `KIT_VERSION` thì dừng page để đồng bộ.
 
 ## Đầu vào và phạm vi
 
@@ -20,6 +20,7 @@
 | [section] | [global/shared/card/page] | [tab] | [path] | [ACF/query/options] |
 
 - DOM & JS hooks cần bảo toàn: [Swiper, Fancybox, GSAP, Tabs, `data-*` quan sát từ HTML]
+- CF7 Form Markup (nếu section có Form): [Mã tag Contact Form 7 bóc tách chuẩn theo mockup HTML để dán vào CF7 backend]
 - Câu hỏi còn mở: [đánh số, chỉ các quyết định ảnh hưởng triển khai]
 - Quyết định đã có từ dự án: [liên kết hoặc mô tả ngắn]
 - Kết quả duyệt mapping: [Chưa duyệt / Đã duyệt bởi người dùng, ngày / Cần sửa]
@@ -39,6 +40,7 @@
 
 - File tạo/sửa: [danh sách]
 - File chung đã được main phân quyền: [danh sách hoặc “không có”]
+- Form CF7 & Class thẻ form (ZTR-19): [Gọi qua `canhcam_render_cf7_shortcode($shortcode, $form_class)` kèm class từ HTML mockup]
 - Hành vi dữ liệu rỗng/fallback & bảo toàn DOM/JS: [mô tả ngắn]
 - Kiểm tra đã chạy và output (`php -l` & `verify_theme.py --html ... --php ...`): [lệnh + output thật; nếu chưa chạy ghi `[NOT RUN]`]
 - Điểm còn mở / cần main xử lý: [nếu có]
@@ -50,5 +52,5 @@
 - Kết quả: `[PASS]` / `[ACTION REQUIRED]` / `[BLOCKED]` / `[NOT RUN]`
 - Bằng chứng kiểm tra: [mỗi lệnh `php -l`, `verify_theme.py`, `rg` và output thật; phạm vi file đã quét]
 - Edge cases cần WordPress runtime: [đã chạy + output / `[NOT RUN]` + lý do]
-- Lỗi cần sửa: [mã ZTR-01..18, file:dòng, cách tái hiện, hướng sửa]
+- Lỗi cần sửa: [mã ZTR-01..19, file:dòng, cách tái hiện, hướng sửa]
 - Bước kế tiếp: [DONE / REWORK / chờ điều kiện cụ thể]

@@ -1,7 +1,7 @@
 # 📐 BẢN THIẾT KẾ THEME CANHCAM (CANHCAM THEME BLUEPRINT)
 
 > **Phạm vi áp dụng:** Bộ quy chuẩn cấu trúc, mô hình dữ liệu và nguyên tắc kỹ thuật dùng lại cho **MỌI DỰ ÁN** WordPress theme của CanhCam.  
-> **Kit version:** 2.2.0 (xem `KIT_VERSION`; quy trình điều phối nằm trong `AGENTS.md`)
+> **Kit version:** 2.3.0 (xem `KIT_VERSION`; quy trình điều phối nằm trong `AGENTS.md`)
 > **Cập nhật:** 2026-11-07  
 
 ---
@@ -13,7 +13,7 @@
 | Architect | §2 (gồm bảng mapping §2.3 & phân tầng đa trang §2.4), §6.2; §3.1 khi có taxonomy phân cấp |
 | ACF builder | §6–7 (nhất là quy tắc chống trùng `field_key` §6.2); quyết định dự án trong `PROJECT_OVERRIDES.md` |
 | Coder | §2.1, §8–9 (gồm bảo toàn DOM/JS §8.5); mục khác khi page thực sự cần |
-| Reviewer | §11 (18 ZTR); `PROJECT_OVERRIDES.md` và biến thể đã duyệt trong `PROJECT_VARIANTS.md` |
+| Reviewer | §11 (19 ZTR); `PROJECT_OVERRIDES.md` và biến thể đã duyệt trong `PROJECT_VARIANTS.md` |
 
 Blueprint chứa quy chuẩn kỹ thuật. State machine, Wave 0/1/2, ownership và spawn contract nằm duy nhất ở `AGENTS.md`.
 
@@ -356,6 +356,22 @@ $args = array(
 4. **Bảo toàn JS Hooks (`data-*` & class điều khiển):**
    - Không tự ý đổi hoặc xóa các class/attribute phục vụ JS trong `main.min.js` / `core.min.js` (ví dụ: `.swiper`, `.swiper-wrapper`, `.swiper-slide`, `data-fancybox`, `data-tab`, `data-toggle`, `.tab-item`, `.tab-panel`).
 
+### 8.6. Quy Chuẩn Contact Form 7 (CF7 Tag Markup & Form Class Helper)
+1. **Trích xuất CF7 Tag Markup khi bóc tách (Bắt buộc):**
+   - Khi bất kỳ section/component nào chứa form (Contact, Newsletter, Popup booking, Tư vấn), `wp-architect` và `wp-coder` bắt buộc phải tạo một bản **CF7 Tag Markup** khớp với cấu trúc HTML bên trong thẻ `<form>` (dùng đúng tag CF7: `[text* ...]`, `[email* ...]`, `[textarea ...]`, `[select ...]`, `[submit ...]`, giữ nguyên các wrapper `.form-group`, `.block-input`, class button và placeholder).
+   - Bản markup này được ghi vào handoff page mục `CF7 Form Markup` để bàn giao cho quản trị viên/khách hàng tạo form trong admin mà không cần tự mò viết tag.
+2. **Helper `canhcam_render_cf7_shortcode($shortcode, $form_class)`:**
+   - Contact Form 7 mặc định sinh ra thẻ `<form class="wpcf7-form ...">` và không cho phép admin can thiệp class tùy chỉnh trên thẻ `<form>`.
+   - Để bảo toàn 100% CSS và selector JS từ HTML gốc (ZTR-18 & ZTR-19), **TUYỆT ĐỐI CẤM** gọi `echo do_shortcode($form_shortcode)` thô khi thẻ `<form>` trong HTML gốc có class CSS riêng (ví dụ: `class="home-contact-form"`, `class="newsletter-form"`, `class="contact-form-main"`).
+   - Bắt buộc gọi qua helper chuẩn của theme:
+     ```php
+     echo canhcam_render_cf7_shortcode($form_shortcode, 'home-contact-form');
+     ```
+   - Helper nhận 2 tham số:
+     1. `$shortcode`: Biến lưu chuỗi shortcode CF7 từ ACF (hoặc ID form).
+     2. `$form_class`: Chuỗi class CSS cần chèn vào thẻ `<form>` (ví dụ: `'home-contact-form'`, `'newsletter-form'`).
+   - Helper can thiệp qua hook `wpcf7_form_class_attr` kèm regex fallback để đảm bảo thẻ `<form>` luôn có đủ class theo mockup HTML mà không làm rò rỉ sang các form khác trên cùng trang.
+
 ---
 
 ## 9. QUY CHUẨN TƯƠNG TÁC FRONTEND & AJAX AN TOÀN
@@ -412,7 +428,7 @@ Khi một dự án cần thay đổi hành vi chuẩn (ví dụ: chuyển hướ
 
 ## 11. BỘ QUY TẮC LỖI CẤM TUYỆT ĐỐI MỞ RỘNG (18 ZERO TOLERANCE RULES)
 
-Bất kỳ vi phạm nào trong 18 quy tắc dưới đây sẽ bị `wp-reviewer` đánh **`[ACTION REQUIRED]` / `[FAIL]` NGAY LẬP TỨC**:
+Bất kỳ vi phạm nào trong 19 quy tắc dưới đây sẽ bị `wp-reviewer` đánh **`[ACTION REQUIRED]` / `[FAIL]` NGAY LẬP TỨC**:
 
 | Mã | Tên Lỗi Cấm | Quy Cách Bắt Buộc |
 |---|---|---|
@@ -434,6 +450,7 @@ Bất kỳ vi phạm nào trong 18 quy tắc dưới đây sẽ bị `wp-reviewe
 | **ZTR-16** | Render Thẻ HTML Rỗng | Nếu không có dữ liệu, dùng `return;` bail out lập tức, không render thẻ bao bọc HTML rỗng. |
 | **ZTR-17** | Trùng Lặp ACF `key` Toàn Cục | Mọi `group` key và `field` key trong `acf-json/*.json` phải duy nhất toàn site (mang tiền tố `field_{page_key}_{section}_*`). Cấm trùng `field_key` giữa các file JSON. |
 | **ZTR-18** | Đứt Gãy DOM / JS Hook Gốc | Cấm bỏ sót `<section class="...">` hoặc làm mất class CSS đầu tiên / thuộc tính `data-*` kích hoạt JS (Swiper, Fancybox, Tabs) so với file HTML nguồn. |
+| **ZTR-19** | Render Form CF7 Mất Class | Cấm gọi `echo do_shortcode($form_shortcode)` thô khi thẻ `<form>` trong HTML gốc có class CSS riêng. Bắt buộc dùng `canhcam_render_cf7_shortcode($shortcode, $form_class)` và viết sẵn bản CF7 Tag Markup trong handoff. |
 
 ---
 
