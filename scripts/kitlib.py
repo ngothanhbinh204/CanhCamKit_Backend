@@ -8,6 +8,7 @@ sys.dont_write_bytecode = True
 
 import glob
 import hashlib
+from html.parser import HTMLParser
 from pathlib import Path
 import re
 from typing import Any
@@ -35,6 +36,156 @@ EXCLUDED_DIRS: tuple[str, ...] = (
 
 SECTION_RE = re.compile(r"<section\b[^>]*\bclass=[\"']\s*([^\s\"']+)", re.I)
 TEMPLATE_PART_RE = re.compile(r"get_template_part\(\s*['\"]([^'\"]+)['\"]")
+
+
+def php_views(source: str) -> tuple[str, str, str]:
+    """Offset-preserving PHP (no comments), code (no strings), and literal HTML.
+
+    Heredoc/nowdoc are opaque. This is a lexer, not a PHP interpreter.
+    """
+    blank = lambda s: ''.join('\n' if c == '\n' else ' ' for c in s)
+    clean, code, markup = list(blank(source)), list(blank(source)), list(source)
+    i, in_php = 0, False
+    while i < len(source):
+        if not in_php:
+            opening = re.match(r'<\?(?:php\b|=)', source[i:], re.I)
+            if not opening:
+                i += 1
+                continue
+            end = i + opening.end()
+            markup[i:end] = blank(source[i:end])
+            # Mark interpolated attributes; whitespace must not look like a literal class.
+            markup[i] = '\x00'
+            i, in_php = end, True
+            continue
+        if source.startswith('?>', i):
+            markup[i:i+2] = '  '
+            i, in_php = i + 2, False
+            continue
+        start = i
+        if source.startswith(('//', '#'), i) and not source.startswith('#[', i):
+            end = source.find('\n', i)
+            close = source.find('?>', i)
+            i = min(x for x in (end, close, len(source)) if x >= 0)
+        elif source.startswith('/*', i):
+            end = source.find('*/', i + 2)
+            i = len(source) if end < 0 else end + 2
+        elif source.startswith('<<<', i):
+            head = re.match(r"<<<[ \t]*['\"]?([A-Za-z_]\w*)['\"]?[^\n]*\n", source[i:])
+            tail = re.search(r'^\s*' + re.escape(head[1]) + r'\b', source[i+head.end():], re.M) if head else None
+            i = i + head.end() + tail.end() if tail else len(source)
+        elif source[i] in "'\"`":
+            quote = source[i]
+            i += 1
+            while i < len(source):
+                if source[i] == '\\':
+                    i += 2
+                elif source[i] == quote:
+                    i += 1
+                    break
+                else:
+                    i += 1
+            i = min(i, len(source))
+            clean[start:i] = source[start:i]
+        else:
+            clean[i] = code[i] = source[i]
+            i += 1
+        markup[start:i] = blank(source[start:i])
+    return ''.join(clean), ''.join(code), ''.join(markup)
+
+
+def literal_string(expr: str) -> str | None:
+    expr = expr.strip()
+    if not re.fullmatch(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"", expr, re.S):
+        return None
+    if expr[0] == '"' and ('$' in expr or '\\' in expr):
+        return None
+    return expr[1:-1].replace("\\'", "'").replace('\\\\', '\\')
+
+
+def closing_delimiter(code: str, start: int) -> int | None:
+    stack = []
+    for i in range(start, len(code)):
+        c = code[i]
+        if c in '([{':
+            stack.append(c)
+        elif c in ')]}':
+            if not stack or stack.pop() != {')': '(', ']': '[', '}': '{'}[c]:
+                return None
+            if not stack:
+                return i
+    return None
+
+
+def php_calls(source: str) -> list[dict[str, Any]]:
+    clean, code, _ = php_views(source)
+    calls = []
+    for match in re.finditer(r'\b([A-Za-z_]\w*)\s*\(', code):
+        prefix = code[:match.start()].rstrip()
+        if prefix.endswith(('->', '::', '$', '\\')) or re.search(r'\bfunction\s*&?\s*$', prefix):
+            continue
+        opening = code.index('(', match.start())
+        end = closing_delimiter(code, opening)
+        if end is None:
+            continue
+        args, start, depth = [], opening + 1, 0
+        for i in range(start, end):
+            if code[i] in '([{':
+                depth += 1
+            elif code[i] in ')]}':
+                depth -= 1
+            elif code[i] == ',' and depth == 0:
+                args.append(clean[start:i].strip())
+                start = i + 1
+        args.append(clean[start:end].strip())
+        calls.append({'name': match[1], 'args': args, 'start': match.start(), 'end': end + 1,
+                      'line': source.count('\n', 0, match.start()) + 1})
+    return calls
+
+
+def template_references(source: str, root: Path) -> list[dict[str, Any]]:
+    refs = []
+    for call in php_calls(source):
+        name, args = call['name'], call['args']
+        if name not in ('get_template_part', 'get_header', 'get_footer', 'get_sidebar'):
+            continue
+        slug = literal_string(args[0]) if name == 'get_template_part' else name[4:]
+        variant_arg = (args[1] if len(args) > 1 else '') if name == 'get_template_part' else args[0]
+        variant = '' if variant_arg in ('', 'null', 'false') else literal_string(variant_arg)
+        confidence = 'static'
+        if slug is None or variant is None:
+            target, confidence = f"dynamic:{name}@{call['start']}", 'dynamic'
+        else:
+            specific = f'{slug}-{variant}.php' if variant else f'{slug}.php'
+            target = specific if (root / specific).is_file() else f'{slug}.php'
+            if not (root / target).is_file():
+                confidence = 'unresolved'
+        refs.append({**call, 'target': target, 'confidence': confidence})
+    return refs
+
+
+def section_classes(source: str, php: bool = False) -> list[str]:
+    """First class of real literal section tags only; no runtime parity claim."""
+    class Sections(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.sections = []
+            self.opaque = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag in ('script', 'style'):
+                self.opaque += 1
+            if tag == 'section' and not self.opaque:
+                value = dict(attrs).get('class') or ''
+                if value.split() and '\x00' not in value:
+                    self.sections.append(value.split()[0])
+
+        def handle_endtag(self, tag):
+            if tag in ('script', 'style'):
+                self.opaque = max(0, self.opaque - 1)
+    parser = Sections()
+    parser.feed(php_views(source)[2] if php else source)
+    return parser.sections
 
 
 def find_theme_root() -> Path:
@@ -79,8 +230,12 @@ def resolve_php_files(theme_root: Path, php_patterns: list[str]) -> list[Path]:
     while queue:
         current = queue.pop(0)
         text = current.read_text(encoding="utf-8", errors="ignore")
-        for slug in TEMPLATE_PART_RE.findall(text):
-            candidate = (theme_root / f"{slug}.php").resolve()
+        for ref in template_references(text, theme_root):
+            if ref['confidence'] != 'static':
+                continue
+            candidate = (theme_root / ref['target']).resolve()
+            if not candidate.is_relative_to(theme_root.resolve()):
+                continue
             if candidate.is_file() and candidate not in visited:
                 visited.add(candidate)
                 resolved.append(candidate)

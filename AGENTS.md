@@ -4,6 +4,10 @@
 
 ## Nguồn sự thật và phạm vi đọc
 
+- **Smallest Reliable Context, Smallest Safe Change:** đọc task + `PROJECT_OVERRIDES.md`, chạy `codemap.py check`, rồi `codemap.py query --page <slug>` / `--file <path>` / `--field <key-or-path>` (`--max-items 40`). Đọc source thật trong kết quả trước khi sửa; chỉ mở đúng mục Blueprint cần thiết. Khi sửa PHP/ACF, dùng `codemap.py impact --file <path>` để kiểm tra consumer trực tiếp. Không mặc định nạp toàn bộ shards/Blueprint/source.
+- Map stale/missing: không dùng kết quả cũ làm bằng chứng; main rebuild khi được giao quyền ghi map, worker read-only báo main hoặc dùng `rg` trên phạm vi cần thiết. `static`/`confirmed` chỉ xác nhận quan hệ cú pháp; `inferred`, `dynamic`, `unresolved` cần xác minh. `truncated` yêu cầu query hẹp hơn khi dependency cần thiết bị lược bỏ.
+- Chọn FAST cho sửa nhỏ có phạm vi rõ; STANDARD cho mapping/ACF/code/review thông thường; STRICT cho shared/CPT/taxonomy/AJAX hoặc nhiều consumer. Cả ba giữ approval và verification bắt buộc; không spawn đủ bốn vai trò cho mọi sửa nhỏ. Handoff hiện có là ngữ cảnh resume: state, quyết định duyệt, target/file, bằng chứng gần nhất, blocker và bước tiếp theo; chưa cần state file mới.
+
 - Code/theme hiện tại, HTML nguồn và quyết định người dùng là nguồn sự thật. Đọc `PROJECT_OVERRIDES.md` trước Blueprint; nếu thiếu quyết định cần cho bước hiện tại thì hỏi, không lấy giá trị ví dụ trong Blueprint làm cấu hình dự án.
 - `CANHCAM_THEME_BLUEPRINT.md` chứa **một** schema mapping/ACF, chuẩn code, bảo toàn DOM và bảng ZTR. Đọc đúng mục: architect §2 (nhất là §2.3), §3.1 khi có taxonomy phân cấp, §6.2, trích xuất CF7 markup §8.6 khi page có form; ACF builder §6–7; coder §2.1, §8–9 (gồm bảo toàn DOM/JS §8.5, helper render CF7 kèm form class §8.6); reviewer §11 (19 ZTR, nhất là ZTR-18 DOM Parity & ZTR-19 CF7 form class) cùng `PROJECT_VARIANTS.md` nếu có. Không chép Blueprint vào prompt hay file agent.
 - `HANDOVER_TRACKING.md` là bảng tổng, **chỉ main sửa**. Mỗi page có `handoffs/{page-slug}.md` theo `PAGE_HANDOFF_TEMPLATE.md`. Main ghi đầu vào, mapping đã duyệt và Review từ stdout; ACF builder/coder chỉ ghi đúng mục của mình sau khi được giao.

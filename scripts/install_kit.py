@@ -78,20 +78,6 @@ def render_state_template(src_name: str, raw_text: str, meta: dict[str, str]) ->
     return text
 
 
-def bump_kit_version_in_file(path: Path, new_version: str, dry_run: bool) -> bool:
-    content = path.read_text(encoding="utf-8")
-    updated = re.sub(
-        r"(Kit version:\s*`?)(\d+\.\d+\.\d+)(`?)",
-        rf"\g<1>{new_version}\g<3>",
-        content,
-    )
-    if updated != content:
-        if not dry_run:
-            path.write_text(updated, encoding="utf-8")
-        return True
-    return False
-
-
 def copy_file(src: Path, dst: Path, dry_run: bool, actions: list[str]) -> None:
     rel_dst = dst.as_posix()
     exists = dst.is_file()
@@ -160,7 +146,7 @@ def main() -> int:
     parser.add_argument(
         "--upgrade",
         action="store_true",
-        help="Cập nhật bộ rule/agent mới nhất và nâng số Kit version trong các file state/handoff hiện có",
+        help="Cập nhật rule/agent và CODEMAP; giữ nguyên state/handoff, không tự migrate schema",
     )
     parser.add_argument(
         "--force-reset",
@@ -217,14 +203,7 @@ def main() -> int:
     for src_tpl, dst_name in STATE_TEMPLATES:
         dst_path = theme_root / dst_name
         if dst_path.is_file() and not args.force_reset:
-            if args.upgrade:
-                changed = bump_kit_version_in_file(dst_path, VERSION, args.dry_run)
-                if changed:
-                    actions.append(f"  [UPGRADE-VER] {dst_path.as_posix()} (-> v{VERSION})")
-                else:
-                    actions.append(f"  [KEEP]        {dst_path.as_posix()} (bảo toàn dữ liệu dự án)")
-            else:
-                actions.append(f"  [SKIP]        {dst_path.as_posix()} (đã tồn tại — giữ nguyên dữ liệu dự án)")
+            actions.append(f"  [KEEP]        {dst_path.as_posix()} (giữ nguyên dữ liệu và version; migration cần review riêng)")
         else:
             raw_tpl = (KIT_ROOT / src_tpl).read_text(encoding="utf-8")
             rendered = render_state_template(src_tpl, raw_tpl, meta)
@@ -240,11 +219,7 @@ def main() -> int:
         if not args.dry_run:
             handoffs_dir.mkdir(parents=True, exist_ok=True)
     else:
-        if args.upgrade:
-            for h_file in sorted(handoffs_dir.glob("*.md")):
-                if bump_kit_version_in_file(h_file, VERSION, args.dry_run):
-                    actions.append(f"  [UPGRADE-VER] {h_file.as_posix()} (-> v{VERSION})")
-        actions.append(f"  [OK]          {handoffs_dir.as_posix()}/")
+        actions.append(f"  [KEEP]        {handoffs_dir.as_posix()}/ (không đổi version handoff)")
 
     # Step 4: Git Hygiene (.gitignore)
     if not args.no_gitignore and KIT_ROOT.parent == theme_root:
@@ -266,7 +241,11 @@ def main() -> int:
         if cm_res.returncode == 0:
             actions.append(f"  [BUILD-MAP]   {(theme_root / 'CODEMAP.md').as_posix()} & .ai-map/")
         else:
-            actions.append(f"  [WARN]        codemap.py build cảnh báo: {(cm_res.stdout + cm_res.stderr).strip()}")
+            actions.append(f"  [FAIL]        codemap.py build: {(cm_res.stdout + cm_res.stderr).strip()}")
+            for line in actions:
+                print(line)
+            print('CÀI ĐẶT CHƯA HOÀN TẤT: core files đã được copy; sửa lỗi và chạy lại. State/handoff được giữ nguyên nếu không dùng --force-reset.')
+            return 1
 
     for line in actions:
         print(line)

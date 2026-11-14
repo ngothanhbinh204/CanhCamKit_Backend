@@ -139,29 +139,32 @@ def check_parity(theme_root: Path, html_arg: str, php_patterns: list[str]) -> in
         print(f"[FAIL] No PHP files matched: {php_patterns}")
         return 1
 
-    html_sections = SECTION_RE.findall(html_path.read_text(encoding="utf-8", errors="ignore"))
+    from kitlib import section_classes
+    html_sections = section_classes(html_path.read_text(encoding="utf-8", errors="ignore"))
+    print('[NOT RUN] [ZTR-18] Runtime DOM structure / JS hooks / browser parity; static markers only.')
+    if not html_sections:
+        print('[NOT RUN] [ZTR-18] No literal source section markers to compare.')
+        return 1
     php_sections: set[str] = set()
-    php_combined = ""
     for php_file in php_files:
         content = php_file.read_text(encoding="utf-8", errors="ignore")
-        php_combined += "\n" + content
-        php_sections.update(SECTION_RE.findall(content))
+        php_sections.update(section_classes(content, php=True))
 
     missing: list[str] = []
     for sec in html_sections:
-        if sec not in php_sections and sec not in php_combined:
+        if sec not in php_sections:
             missing.append(sec)
 
     rel_html = html_path.resolve().relative_to(theme_root.resolve()).as_posix() if html_path.is_absolute() else html_arg
     if missing:
         print(
-            f"[FAIL] [ZTR-18] DOM Section Parity failed for {rel_html}: "
+            f"[FAIL] [ZTR-18] Static section markers failed for {rel_html}: "
             f"missing section class(es) {missing} in {[p.name for p in php_files]}"
         )
         return 1
 
     print(
-        f"[PASS] [ZTR-18] DOM Section Parity: {len(html_sections)}/{len(html_sections)} section(s) from "
+        f"[PASS] [ZTR-18 static markers only] {len(html_sections)}/{len(html_sections)} section(s) from "
         f"{html_path.name} verified across {len(php_files)} PHP file(s) ({', '.join(html_sections)})."
     )
     return 0

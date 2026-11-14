@@ -7,6 +7,8 @@ import sys
 sys.dont_write_bytecode = True
 
 import argparse
+import contextlib
+import io
 from collections import defaultdict
 from datetime import datetime, timezone
 import json
@@ -24,11 +26,18 @@ from kitlib import (
     find_theme_root,
     hash_file_normalized,
     iter_acf_fields,
+    php_views,
+    php_calls,
+    literal_string,
+    closing_delimiter,
+    template_references,
+    section_classes,
 )
 
 
 KIT_ROOT = Path(__file__).resolve().parents[1]
 KIT_VERSION = (KIT_ROOT / "KIT_VERSION").read_text(encoding="utf-8").strip()
+GRAPH_SCHEMA = 2
 
 # Regex patterns for PHP static/dynamic extraction
 TEMPLATE_NAME_RE = re.compile(r"Template Name:\s*(.+)", re.I)
@@ -78,10 +87,8 @@ POST_TYPE_ARG_RE = re.compile(
 
 
 def strip_quotes(expr: str) -> tuple[bool, str]:
-    s = expr.strip()
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in ("'", '"'):
-        return True, s[1:-1]
-    return False, s
+    value = literal_string(expr)
+    return (True, value) if value is not None else (False, expr.strip())
 
 
 def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS) -> dict[str, Any]:
@@ -96,13 +103,18 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
         if node_id not in nodes:
             nodes[node_id] = {"id": node_id, "type": node_type, **attrs}
         else:
-            nodes[node_id].update(attrs)
+            nodes[node_id].update(type=node_type, **attrs)
 
-    def add_edge(src: str, dst: str, rel: str, confidence: str) -> None:
+    def add_edge(src: str, dst: str, rel: str, confidence: str, **evidence: Any) -> None:
         key = (src, dst, rel, confidence)
         if key not in seen_edges:
             seen_edges.add(key)
-            edges.append({"source": src, "target": dst, "type": rel, "confidence": confidence})
+            edges.append({"source": src, "target": dst, "type": rel, "confidence": confidence,
+                          "status": "confirmed" if confidence == "static" else confidence, **evidence})
+
+    for path in files:
+        rel = path.relative_to(root).as_posix()
+        add_node(rel, "File", path=rel)
 
     html_files = [f for f in files if f.suffix.lower() == ".html"]
     json_files = [f for f in files if f.suffix.lower() == ".json"]
@@ -115,11 +127,12 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
         rel = hfile.relative_to(root).as_posix()
         content = hfile.read_text(encoding="utf-8", errors="ignore")
         classes: list[str] = []
-        for cls in SECTION_RE.findall(content):
+        for cls in section_classes(content):
             if cls not in classes:
                 classes.append(cls)
             section_node_id = f"UISection:{cls}"
             add_node(section_node_id, "UISection", name=cls, path=rel)
+            add_edge(rel, section_node_id, "contains_section", "static")
             if rel not in section_to_html[cls]:
                 section_to_html[cls].append(rel)
         ui_sections_by_file[rel] = classes
@@ -140,7 +153,7 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
         tier = classify_component_tier(rel)
         if tier is not None:
             parse_args_keys: list[str] = []
-            for block in WP_PARSE_ARGS_RE.findall(text):
+            for block in WP_PARSE_ARGS_RE.findall(php_views(text)[0]):
                 for k in ARRAY_KEY_RE.findall(block):
                     if k not in parse_args_keys:
                         parse_args_keys.append(k)
@@ -157,7 +170,11 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
             add_node(rel, "Template", path=rel, template_name=tpl_name)
 
     # 3. Scan PHP for CPT, Taxonomy, OptionsPage, Functions, Hooks, AjaxActions
-    for rel, text in sorted(php_contents.items()):
+    for rel, raw_text in sorted(php_contents.items()):
+        # Keep literal arguments but only admit real code call sites.
+        clean, code, _ = php_views(raw_text)
+        calls = php_calls(raw_text)
+        text = '\n'.join(clean[c['start']:c['end']] + ';' for c in calls)
         # Local string variables (e.g. $options_menu_slug = 'theme-settings')
         local_vars = dict(OPTIONS_VAR_RE.findall(text))
 
@@ -234,10 +251,11 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
             add_edge(rel, opt_id, "registers", conf)
 
         # Functions (in inc/ or root helper files)
-        for fn_name, fn_params in FUNC_DEF_RE.findall(text):
+        for fn_name, fn_params in FUNC_DEF_RE.findall(code):
             fn_id = f"Function:{fn_name}"
             params_clean = " ".join(fn_params.split())
             add_node(fn_id, "Function", name=fn_name, params=params_clean, source=rel)
+            add_edge(rel, fn_id, "defines", "static", file=rel)
 
         # Hooks & AJAX Actions
         for kind, hook_name, callback_raw in HOOK_CALL_RE.findall(text):
@@ -265,10 +283,14 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
         rel = jfile.relative_to(root).as_posix()
         try:
             data = json.loads(jfile.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+        except (ValueError, OSError) as exc:
+            raise ValueError(f"Invalid ACF JSON {rel}: {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"ACF JSON must be an object: {rel}")
 
         top_key = data.get("key", "")
+        if not isinstance(top_key, str) or not top_key:
+            raise ValueError(f'Missing ACF key: {rel}')
         key_kind = classify_acf_json_key(top_key)
 
         if key_kind == "post_type":
@@ -292,6 +314,9 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
 
         # Default: ACFGroup
         group_id = f"ACFGroup:{top_key}"
+        if group_id in nodes:
+            raise ValueError(f'Duplicate ACF group key {top_key}: {rel}')
+        add_edge(rel, group_id, "defines", "static", file=rel)
         title = data.get("title", "")
         location_rules = data.get("location", [])
         loc_strings: list[str] = []
@@ -359,6 +384,8 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
             ftype = field.get("type", "")
             if fkey:
                 field_node_id = f"ACFField:{fkey}"
+                if field_node_id in nodes:
+                    raise ValueError(f'Duplicate ACF field key {fkey}: {rel}')
                 add_node(
                     field_node_id,
                     "ACFField",
@@ -369,6 +396,7 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
                     path=fpath,
                     source=rel,
                 )
+                add_edge(group_id, field_node_id, "contains_field", "static", file=rel)
                 if fname:
                     field_name_to_keys[fname].append(field_node_id)
 
@@ -390,72 +418,136 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
             }
         )
 
-    # 5. Scan PHP files for includes, uses_field, queries, and renders (UI parity)
+    # 5. Real call sites only. Do not turn expressions into certain dependencies.
     for rel, text in sorted(php_contents.items()):
-        # 5a. includes (get_template_part)
-        has_dynamic_include = False
-        for m_inc in GET_TEMPLATE_PART_CALL_RE.finditer(text):
-            arg1_raw = m_inc.group(1)
-            arg2_raw = m_inc.group(2)
-            is_lit1, val1 = strip_quotes(arg1_raw)
-            if is_lit1:
-                if arg2_raw is not None:
-                    is_lit2, val2 = strip_quotes(arg2_raw)
-                    if is_lit2 and val2:
-                        cand_specific = f"{val1}-{val2}.php"
-                        cand_base = f"{val1}.php"
-                        target = cand_specific if cand_specific in php_rel_set else cand_base
-                        add_edge(rel, target, "includes", "static")
-                    else:
-                        cand_base = f"{val1}.php"
-                        add_edge(rel, cand_base, "includes", "dynamic")
-                else:
-                    add_edge(rel, f"{val1}.php", "includes", "static")
-            else:
-                has_dynamic_include = True
-                expr_clean = " ".join(arg1_raw.strip().split())
-                add_edge(rel, f"dynamic:get_template_part({expr_clean})", "includes", "dynamic")
+        clean, code, _ = php_views(text)
+        calls = php_calls(text)
+        for ref in template_references(text, root):
+            target = f"{ref['target']}:{rel}" if ref['confidence'] == 'dynamic' else ref['target']
+            add_edge(rel, target, 'includes', ref['confidence'], file=rel,
+                     line=ref['line'], expression=clean[ref['start']:ref['end']])
 
-        if has_dynamic_include:
-            for str_path in STRING_TEMPLATE_PATH_RE.findall(text):
-                cand = f"{str_path}.php"
-                if cand in php_rel_set:
-                    add_edge(rel, cand, "includes", "literal-in-array")
+        for match in re.finditer(r'\b(?:require|include)(?:_once)?\b', code):
+            end = code.find(';', match.end())
+            expr = clean[match.end():end if end >= 0 else len(clean)].strip()
+            if expr.startswith('(') and expr.endswith(')'):
+                expr = expr[1:-1].strip()
+            value = literal_string(expr)
+            base = Path(rel).parent
+            prefix = re.match(r'(?:__DIR__|get_template_directory\s*\(\s*\)|get_stylesheet_directory\s*\(\s*\))\s*\.\s*(.*)$', expr, re.S)
+            if prefix:
+                value = literal_string(prefix[1])
+                if not expr.startswith('__DIR__'):
+                    base = Path('.')
+            target = None
+            if value is not None:
+                candidate = (root / base / value.lstrip('/')).resolve()
+                if candidate.is_relative_to(root):
+                    target = candidate.relative_to(root).as_posix()
+            confidence = 'static' if target in php_rel_set else 'unresolved'
+            add_edge(rel, target or f'dynamic:include@{rel}:{match.start()}', 'includes',
+                     confidence, file=rel, line=text.count('\n', 0, match.start()) + 1, expression=expr)
 
-        # 5b. uses_field (get_field, the_field, have_rows, get_sub_field, canhcam_get_option)
-        for fn_call, arg1_raw in ACF_READ_CALL_RE.findall(text):
-            # Ignore helper definition line `function canhcam_get_option($key`
-            if fn_call == "canhcam_get_option" and f"function canhcam_get_option({arg1_raw}" in text:
+        # Resolve only recognizable while(have_rows(...)) scopes.
+        ranges = []
+        for call in calls:
+            if call['name'] != 'have_rows' or not re.search(r'\bwhile\s*\(\s*$', code[:call['start']]):
                 continue
-            is_lit, val = strip_quotes(arg1_raw)
-            if is_lit and val:
-                matched_nodes = field_name_to_keys.get(val, [])
-                if matched_nodes:
-                    for fnode_id in matched_nodes:
-                        add_edge(rel, fnode_id, "uses_field", "static")
-                else:
-                    add_edge(rel, f"ACFFieldName:{val}", "uses_field", "static")
+            tail = re.match(r'\s*\)\s*([:{])', code[call['end']:])
+            if not tail:
+                continue
+            start = call['end'] + tail.end() - 1
+            if tail[1] == '{':
+                end = closing_delimiter(code, start)
             else:
-                expr_clean = " ".join(arg1_raw.strip().split())
-                add_edge(rel, f"dynamic:{fn_call}({expr_clean})", "uses_field", "dynamic")
+                depth, end = 1, None
+                for token in re.finditer(r'\bwhile\s*\(|\bendwhile\b', code[start+1:]):
+                    depth += -1 if token[0] == 'endwhile' else 1
+                    if depth == 0:
+                        end = start + 1 + token.start()
+                        break
+            if end is not None:
+                ranges.append((start, end, literal_string(call['args'][0])))
 
-        # 5c. queries (WP_Query / get_posts post_type)
-        for m_pt in POST_TYPE_ARG_RE.finditer(text):
-            lit_pt, arr1, arr2, var_pt = m_pt.groups()
-            if lit_pt:
-                add_edge(rel, f"CPT:{lit_pt}", "queries", "static")
-            elif arr1 or arr2:
-                raw_arr = arr1 or arr2
-                for pt in re.findall(r"['\"]([^'\"]+)['\"]", raw_arr):
-                    add_edge(rel, f"CPT:{pt}", "queries", "literal-in-array")
-            elif var_pt:
-                add_edge(rel, f"dynamic:post_type({var_pt.strip()})", "queries", "dynamic")
+        def resolve_field(call):
+            name = literal_string(call['args'][0])
+            if name is None:
+                return [], 'dynamic'
+            is_sub = call['name'] in ('get_sub_field', 'the_sub_field')
+            parents = [r[2] for r in sorted(ranges) if r[0] < call['start'] < r[1]]
+            candidates = [n for n in nodes.values() if n['type'] == 'ACFField'
+                          and (n.get('name') == name or n.get('key') == name)]
+            exact_keys = [n for n in candidates if n['key'] == name]
+            if len(exact_keys) == 1:
+                return exact_keys, 'static'
+            if is_sub or (call['name'] == 'have_rows' and parents):
+                if not parents or None in parents:
+                    return candidates, 'unresolved'
+                paths = {(n['group_key'], '') for n in candidates}
+                for parent in parents:
+                    paths = {(n['group_key'], n['path']) for n in nodes.values() if n['type'] == 'ACFField'
+                             and (n.get('name') == parent or n.get('key') == parent)
+                             and (n['group_key'], n['path'].rsplit('.', 1)[0] if '.' in n['path'] else '') in paths}
+                candidates = [n for n in candidates if '.' in n['path'] and (n['group_key'], n['path'].rsplit('.', 1)[0]) in paths]
+            else:
+                candidates = [n for n in candidates if '.' not in n['path'] and '[' not in n['path']]
+            if len(candidates) > 1:
+                groups = {e['source'].split(':', 1)[1] for e in edges
+                          if e['type'] == 'located_on' and e['target'] == rel and e['confidence'] == 'static'}
+                narrowed = [n for n in candidates if n['group_key'] in groups]
+                if narrowed:
+                    candidates = narrowed
+            return candidates, 'static' if len(candidates) == 1 else 'unresolved'
 
-        # 5d. renders (UI section ↔ PHP using check_parity logic)
-        php_sec_classes = set(SECTION_RE.findall(text))
-        for sec_cls in sorted( section_to_html.keys() ):
-            if sec_cls in php_sec_classes or f'"{sec_cls}' in text or f"'{sec_cls}" in text or f" {sec_cls} " in text:
-                add_edge(rel, f"UISection:{sec_cls}", "renders", "static")
+        for call in calls:
+            name = call['name']
+            evidence = dict(file=rel, line=call['line'], expression=clean[call['start']:call['end']])
+            if name in ('get_field', 'the_field', 'have_rows', 'get_sub_field', 'the_sub_field', 'canhcam_get_option'):
+                candidates, confidence = resolve_field(call)
+                if confidence == 'static':
+                    target = candidates[0]['id']
+                else:
+                    target = f"{confidence}:{rel}:{call['start']}:field"
+                    add_node(target, 'Unresolved', source=rel, expression=evidence['expression'],
+                             candidates=[n['id'] for n in candidates], reason='ACF parent/group/key not uniquely resolved')
+                add_edge(rel, target, 'uses_field', confidence, **evidence)
+            if name in ('WP_Query', 'get_posts'):
+                if name == 'WP_Query' and not re.search(r'\bnew\s*$', code[:call['start']]):
+                    continue
+                arg = call['args'][0]
+                body = arg[1:-1] if arg.startswith('[') and arg.endswith(']') else (
+                    arg[6:-1] if arg.startswith('array(') and arg.endswith(')') else None)
+                parsed = php_calls('<?php query(' + body + ');')[0]['args'] if body is not None else []
+                values = []
+                for item in parsed:
+                    pair = re.fullmatch(r"['\"]post_type['\"]\s*=>\s*(.*)", item, re.S)
+                    if pair:
+                        value = literal_string(pair[1])
+                        if value is not None:
+                            values.append(value)
+                if len(values) == 1:
+                    for value in values:
+                        target = f'CPT:{value}'
+                        if target not in nodes:
+                            add_node(target, 'CPT', slug=value, external=True)
+                        add_edge(rel, target, 'queries', 'static', **evidence)
+                else:
+                    add_edge(rel, f"dynamic:{rel}:{call['start']}:query", 'queries', 'unresolved', **evidence)
+            fn_id = f'Function:{name}'
+            if fn_id in nodes:
+                add_edge(rel, fn_id, 'calls', 'static', **evidence)
+        for sec_cls in sorted(set(section_classes(text, php=True)) & section_to_html.keys()):
+            add_edge(rel, f'UISection:{sec_cls}', 'renders', 'static', file=rel,
+                     evidence='literal section marker only; runtime DOM/JS NOT RUN')
+
+    # Missing declarations and paths are reference nodes, never dangling edges.
+    for edge in edges:
+        for endpoint in ('source', 'target'):
+            node_id = edge[endpoint]
+            if node_id not in nodes:
+                add_node(node_id, 'Unresolved', reference=node_id)
+            if nodes[node_id]['type'] == 'Unresolved' and edge['confidence'] == 'static':
+                edge['confidence'] = edge['status'] = 'unresolved'
 
     sorted_nodes = [nodes[k] for k in sorted(nodes.keys())]
     sorted_edges = sorted(edges, key=lambda e: (e["type"], e["source"], e["target"], e["confidence"]))
@@ -470,14 +562,20 @@ def build_graph(theme_root: Path, scan_dirs: tuple[str, ...] = DEFAULT_SCAN_DIRS
 
 
 def split_if_over_limit(lines: list[str], max_lines: int = 195) -> list[list[str]]:
-    if len(lines) <= max_lines:
-        return [lines]
+    # Soft limit: retain complete paragraphs/tables, never orphan table rows.
     chunks: list[list[str]] = []
     header = lines[:4]
-    body = lines[4:]
-    step = max_lines - len(header)
-    for i in range(0, len(body), step):
-        chunks.append(header + body[i : i + step])
+    current, block = list(header), []
+    for line in lines[4:] + ['']:
+        block.append(line)
+        if line == '':
+            if len(current) + len(block) > max_lines and len(current) > len(header):
+                chunks.append(current)
+                current = list(header)
+            current.extend(block)
+            block = []
+    if len(current) > len(header) or not chunks:
+        chunks.append(current)
     return chunks
 
 
@@ -498,7 +596,7 @@ def render_markdown_outputs(graph_data: dict[str, Any]) -> tuple[str, dict[str, 
     # Calculate dynamic/literal-in-array edges per source file
     unresolved_by_file: dict[str, list[dict[str, str]]] = defaultdict(list)
     for e in edges:
-        if e["confidence"] in ("dynamic", "literal-in-array"):
+        if e["confidence"] != "static":
             unresolved_by_file[e["source"]].append(e)
 
     # Map Template -> ACF Groups & UI HTML
@@ -552,11 +650,11 @@ def render_markdown_outputs(graph_data: dict[str, Any]) -> tuple[str, dict[str, 
         f"# Bản đồ cấu trúc Theme (Code Graph — Kit v{KIT_VERSION})",
         "",
         "## 1. Thứ tự đọc khuyến nghị theo vai trò",
-        "- **Mọi vai trò:** `PROJECT_OVERRIDES.md` → `CODEMAP.md` → Shard theo vai trò → File code/HTML thật.",
-        "- **Architect (`MAPPING`):** `.ai-map/shards/architecture.md` + file `UI/*.html` được giao.",
-        "- **ACF Builder (`ACF`):** `.ai-map/shards/acf-schema.md` + `acf-json/` được giao.",
-        "- **Coder (`CODING`):** `.ai-map/shards/acf-schema.md` + `.ai-map/shards/php-contracts.md` + file PHP/HTML thật.",
-        "- **Reviewer (`REVIEW`):** Chạy `codemap.py check`, đọc `.ai-map/shards/php-contracts.md` để tra ảnh hưởng chéo; **bắt buộc đọc file thật** khi chấm 18 ZTR.",
+        "- **Mọi vai trò:** Task + `PROJECT_OVERRIDES.md` → `codemap.py check` → query đúng target → source thật → mục Blueprint liên quan.",
+        "- **Architect (`MAPPING`):** `query --page <slug>` + HTML; chỉ mở `architecture.md` khi thiếu context dùng chung.",
+        "- **ACF Builder (`ACF`):** `query --group <key>` + JSON thật; chỉ mở `acf-schema.md` khi cần.",
+        "- **Coder (`CODING`):** `query --file <path>` + `impact --file <path>` + PHP/HTML thật; shards chỉ khi thiếu contract.",
+        "- **Reviewer (`REVIEW`):** Query/impact read-only; **bắt buộc đọc source thật** khi chấm 19 ZTR. Static marker không chứng minh DOM/JS runtime.",
         "",
         "## 2. Tổng quan CPT, Taxonomy & Options Pages",
     ]
@@ -585,7 +683,7 @@ def render_markdown_outputs(graph_data: dict[str, Any]) -> tuple[str, dict[str, 
     cm.extend([
         "",
         "## 4. Bảng ánh xạ Template ↔ ACF Group ↔ UI HTML",
-        "| Template PHP | UI HTML tương ứng | ACF Group (`located_on`) | Số part `includes` |",
+        "| Template PHP | UI HTML gợi ý (inferred) | ACF Group (`located_on`) | Số part `includes` |",
         "|---|---|---|---|",
     ])
     for tpl in templates:
@@ -597,20 +695,20 @@ def render_markdown_outputs(graph_data: dict[str, Any]) -> tuple[str, dict[str, 
 
     cm.extend([
         "",
-        "## 5. Điểm không phân giải được tĩnh (Dynamic / Literal-in-Array Edges)",
-        "| File / Nguồn | Số cạnh `dynamic` | Số cạnh `literal-in-array` | Chi tiết tóm tắt |",
+        "## 5. Điểm cần xác minh (Dynamic / Unresolved / Inferred)",
+        "| File / Nguồn | Số cạnh `dynamic` | Số cạnh khác chưa confirmed | Chi tiết tóm tắt |",
         "|---|---|---|---|",
     ])
     for src in sorted(unresolved_by_file.keys()):
         elist = unresolved_by_file[src]
         dyn_c = sum(1 for e in elist if e["confidence"] == "dynamic")
-        lit_c = sum(1 for e in elist if e["confidence"] == "literal-in-array")
+        lit_c = sum(1 for e in elist if e["confidence"] != "dynamic")
         details = "; ".join(f"`{e['type']} -> {e['target']}` ({e['confidence']})" for e in elist[:3])
         if len(elist) > 3:
             details += f" (+{len(elist) - 3})"
         cm.append(f"| `{src}` | {dyn_c} | {lit_c} | {details} |")
 
-    codemap_md = "\n".join(cm[:150]) + "\n"
+    codemap_md = "\n".join(cm) + "\n"
 
     # --- 2. Shard: architecture.md ---
     arch_lines: list[str] = [
@@ -741,7 +839,13 @@ def render_markdown_outputs(graph_data: dict[str, Any]) -> tuple[str, dict[str, 
 
 def cmd_build(theme_root: Path) -> int:
     root = theme_root.resolve()
+    before = {f.relative_to(root).as_posix(): hash_file_normalized(f)
+              for f in collect_scannable_files(root)}
     graph_data = build_graph(root, DEFAULT_SCAN_DIRS)
+    after = {f.relative_to(root).as_posix(): hash_file_normalized(f)
+             for f in collect_scannable_files(root)}
+    if before != after:
+        raise ValueError('Source changed during build; retry when writers finish.')
     codemap_md, shards = render_markdown_outputs(graph_data)
 
     ai_map_dir = root / ".ai-map"
@@ -760,6 +864,7 @@ def cmd_build(theme_root: Path) -> int:
 
     # Write graph.json
     graph_payload = {
+        "schema_version": GRAPH_SCHEMA,
         "kit_version": KIT_VERSION,
         "nodes": graph_data["nodes"],
         "edges": graph_data["edges"],
@@ -770,12 +875,11 @@ def cmd_build(theme_root: Path) -> int:
     )
 
     # Write meta.json with normalized SHA-256 content hashes
-    file_hashes: dict[str, str] = {}
-    for fpath in graph_data["scannable_files"]:
-        rel = fpath.relative_to(root).as_posix()
-        file_hashes[rel] = hash_file_normalized(fpath)
+    file_hashes = after
 
     meta_payload = {
+        "schema_version": GRAPH_SCHEMA,
+        "graph_hash": hash_file_normalized(ai_map_dir / 'graph.json'),
         "kit_version": KIT_VERSION,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "scan_dirs": list(DEFAULT_SCAN_DIRS),
@@ -806,6 +910,18 @@ def cmd_check(theme_root: Path) -> int:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except Exception as exc:
         print(f"[WARN] Invalid .ai-map/meta.json ({exc}). Run `codemap.py build`.")
+        return 2
+
+    if not isinstance(meta, dict) or not isinstance(meta.get('files'), dict):
+        print('[WARN] Invalid metadata shape. Run `codemap.py build`.')
+        return 2
+    graph_path = root / '.ai-map' / 'graph.json'
+    if (meta.get('schema_version') != GRAPH_SCHEMA or meta.get('kit_version') != KIT_VERSION
+            or meta.get('scan_dirs') != list(DEFAULT_SCAN_DIRS)):
+        print('[STALE] Map schema/version/scan scope changed. Main must rebuild explicitly.')
+        return 1
+    if not graph_path.is_file() or meta.get('graph_hash') != hash_file_normalized(graph_path):
+        print('[WARN] Missing or modified graph.json. Main must rebuild explicitly.')
         return 2
 
     scan_dirs = tuple(meta.get("scan_dirs", DEFAULT_SCAN_DIRS))
@@ -841,6 +957,162 @@ def cmd_check(theme_root: Path) -> int:
     return 0
 
 
+def retrieve(graph: dict[str, Any], kind: str, value: str, command: str, limit: int) -> dict[str, Any]:
+    """One-hop navigation plus explicit ACF ownership; no transitive dependency walk."""
+    nodes = {n['id']: n for n in graph['nodes']}
+    edges = graph['edges']
+
+    def page_name(path):
+        return re.sub(r'^(?:done-|template-|page-)', '', Path(path).stem.lower())
+
+    def matches(n):
+        if kind == 'file':
+            return n['id'] == value.replace('\\', '/').removeprefix('./')
+        if kind == 'page':
+            return (n['type'] in ('Template', 'File') and n['id'].endswith(('.php', '.html'))
+                    and page_name(n['id']) == value.lower())
+        if kind == 'group':
+            return n['type'] == 'ACFGroup' and value in (n['id'], n.get('key'), n.get('title'))
+        return n['type'] == 'ACFField' and value in (
+            n['id'], n.get('key'), n.get('name'), n.get('path'), f"{n.get('group_key')}:{n.get('path')}")
+
+    targets = {n['id'] for n in nodes.values() if matches(n)}
+    if not targets:
+        return {'status': 'missing_target', 'target': value, 'items': [], 'truncated': False, 'omitted_count': 0}
+    # A JSON file/group owns its fields. A PHP file owns its declared helpers.
+    owned = {n['id'] for n in nodes.values() if n.get('source') in targets and n['type'] != 'Unresolved'}
+    groups = {n['id'] for n in nodes.values() if n['type'] == 'ACFGroup' and n.get('path') in targets} | {
+        t for t in targets if nodes[t]['type'] == 'ACFGroup'}
+    owned |= {n['id'] for n in nodes.values() if n['type'] == 'ACFField' and 'ACFGroup:' + n['group_key'] in groups}
+    # Selecting a repeater/group field also includes its descendants.
+    for target in targets:
+        node = nodes[target]
+        if node['type'] == 'ACFField':
+            owned |= {n['id'] for n in nodes.values() if n['type'] == 'ACFField'
+                      and n['group_key'] == node['group_key']
+                      and n['path'].startswith((node['path'] + '.', node['path'] + '['))}
+    scope = targets | owned | groups
+    items, seen = [], set()
+
+    def add(category, node_id, edge=None):
+        key = (category, node_id, json.dumps(edge, sort_keys=True) if edge else '')
+        if key in seen:
+            return
+        seen.add(key)
+        node = nodes[node_id]
+        summary = {k: node[k] for k in ('id', 'type', 'path', 'source', 'name', 'key', 'group_key', 'tier', 'reason') if k in node}
+        if 'candidates' in node:
+            summary['candidate_count'] = len(node['candidates'])
+        item = {'category': category, 'node': summary}
+        if edge:
+            item['edge'] = edge
+        items.append(item)
+
+    for target in sorted(targets):
+        add('exact_target', target)
+    # HTML markers suggest reuse; they do not prove a template/page mapping.
+    sections = {e['target'] for e in edges if e['source'] in targets and e['type'] == 'contains_section'}
+    for edge in edges:
+        if edge['type'] == 'renders' and edge['target'] in sections:
+            add('matching_component', edge['source'], {**edge, 'confidence': 'inferred', 'status': 'inferred'})
+    dependency_nodes, consumer_nodes = set(), set()
+    for edge in edges:
+        if edge['source'] in scope and edge['confidence'] == 'static':
+            dependency_nodes.add(edge['target'])
+            add('direct_dependency', edge['target'], edge)
+        if edge['target'] in scope and edge['source'] not in scope and edge['confidence'] == 'static':
+            consumer_nodes.add(edge['source'])
+            add('direct_consumer', edge['source'], edge)
+    # ACF contracts of the target and its immediate PHP dependencies.
+    related = scope | dependency_nodes | consumer_nodes
+    field_ids = {n for n in related if nodes[n]['type'] == 'ACFField'}
+    for edge in edges:
+        if edge['type'] == 'uses_field' and edge['source'] in related and edge['confidence'] == 'static':
+            field_ids.add(edge['target'])
+            add('acf_contract', edge['target'], edge)
+        if edge['type'] == 'located_on' and edge['target'] in related:
+            add('acf_contract', edge['source'], edge)
+    for field in sorted(field_ids):
+        group_id = 'ACFGroup:' + nodes[field]['group_key']
+        if group_id in nodes:
+            add('acf_contract', group_id)
+    for edge in edges:
+        candidates = set(nodes[edge['target']].get('candidates', []))
+        if edge['confidence'] != 'static' and (
+                edge['source'] in related or edge['target'] in scope or candidates & scope):
+            add('unresolved_dependency', edge['target'], edge)
+    order = ('exact_target', 'direct_dependency', 'direct_consumer', 'acf_contract', 'matching_component', 'unresolved_dependency')
+    if command == 'impact':
+        order = ('exact_target', 'direct_consumer', 'unresolved_dependency', 'acf_contract', 'matching_component', 'direct_dependency')
+    items.sort(key=lambda item: (order.index(item['category']), item['node']['id']))
+    total = len(items)
+    kept = items[:limit]
+    file_ids = {n['id'] for n in nodes.values() if n['type'] in ('File', 'Template', 'Component')}
+    files = set()
+    for item in kept:
+        n = item['node']
+        files.update(v for v in (n['id'], n.get('source'), n.get('path')) if v in file_ids)
+        if item.get('edge', {}).get('file') in file_ids:
+            files.add(item['edge']['file'])
+    return {
+        'status': 'ok', 'command': command, 'target': value, 'freshness': 'fresh',
+        'ambiguous_target': kind in ('field', 'group') and len(targets) > 1,
+        'scope': 'one hop + ACF/helper ownership; static evidence does not prove runtime behavior',
+        'items': kept, 'related_files': sorted(files),
+        'shared_components': sorted(n for n in related if nodes[n].get('tier') in (1, 2, 3))[:limit],
+        'truncated': total > limit, 'omitted_count': max(0, total - limit), 'total_items': total,
+        'recommended_checks': ['Read real source and approved handoff/PROJECT_OVERRIDES.md.',
+                               'php -l on changed PHP and affected direct PHP consumers.',
+                               'verify_theme.py --acf for ACF contracts; --html/--php for static markers.',
+                               'Runtime DOM/JS and dynamic dependencies: NOT RUN; verify in WordPress/browser.'],
+        'limitations': ['Dynamic references outside this scope can have unknown consumers.',
+                        'No transitive impact conclusion; query a direct consumer to expand deliberately.'],
+    }
+
+
+def cmd_retrieve(root: Path, ns: argparse.Namespace) -> int:
+    with contextlib.redirect_stdout(io.StringIO()) as messages:
+        code = cmd_check(root)
+    if code:
+        result = {'status': 'stale' if code == 1 else 'unavailable', 'message': messages.getvalue().strip(),
+                  'items': [], 'truncated': False, 'omitted_count': 0}
+    else:
+        graph = json.loads((root / '.ai-map' / 'graph.json').read_text(encoding='utf-8'))
+        kind = next(k for k in ('page', 'file', 'field', 'group') if getattr(ns, k))
+        value = getattr(ns, kind)
+        if kind == 'file' and Path(value).is_absolute():
+            try:
+                value = Path(value).resolve().relative_to(root).as_posix()
+            except ValueError:
+                pass
+        result = retrieve(graph, kind, value, ns.command, ns.max_items)
+        code = 3 if result['status'] == 'missing_target' else 0
+    if ns.format == 'json':
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"[{result['status'].upper()}] {result.get('target', '')}")
+        if result.get('message'):
+            print(result['message'])
+        if result.get('ambiguous_target'):
+            print('[AMBIGUOUS] Multiple ACF matches; select a key or group:path.')
+        for item in result['items']:
+            edge = item.get('edge', {})
+            print(f"- {item['category']}: {item['node']['id']} ({edge.get('status', 'target')})")
+        print(f"truncated={result['truncated']}; omitted_count={result['omitted_count']}")
+        for check in result.get('recommended_checks', []):
+            print(f'- Check: {check}')
+        for note in result.get('limitations', []):
+            print(f'- Limitation: {note}')
+    return code
+
+
+def positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError('must be a positive integer')
+    return number
+
+
 def main() -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -849,7 +1121,7 @@ def main() -> int:
     parent_parser.add_argument(
         "--root",
         type=str,
-        default=None,
+        default=argparse.SUPPRESS,
         help="Đường dẫn thư mục gốc của theme (mặc định: find_theme_root())",
     )
 
@@ -859,24 +1131,29 @@ def main() -> int:
     subparsers.add_parser("build", parents=[parent_parser], help="Quét mã nguồn và ghi CODEMAP.md + .ai-map/")
     subparsers.add_parser("check", parents=[parent_parser], help="Chỉ đọc: kiểm tra độ tươi của .ai-map/meta.json")
 
-    p_query = subparsers.add_parser("query", parents=[parent_parser], help="Tra cứu node/cạnh (P1)")
-    p_query.add_argument("args", nargs="*", help="Tham số truy vấn")
-
-    p_impact = subparsers.add_parser("impact", parents=[parent_parser], help="Phân tích bán kính ảnh hưởng (P1)")
-    p_impact.add_argument("args", nargs="*", help="File hoặc field cần kiểm tra")
+    for command in ('query', 'impact'):
+        child = subparsers.add_parser(command, parents=[parent_parser], help='Read-only bounded context')
+        selector = child.add_mutually_exclusive_group(required=True)
+        for kind in ('page', 'file', 'field', 'group'):
+            selector.add_argument('--' + kind)
+        child.add_argument('--format', choices=('text', 'json'), default='text')
+        child.add_argument('--max-items', type=positive_int, default=40)
 
     ns = parser.parse_args()
-    theme_root = Path(ns.root).resolve() if ns.root else find_theme_root()
+    theme_root = Path(ns.root).resolve() if getattr(ns, 'root', None) else find_theme_root()
 
     if ns.command == "build":
         return cmd_build(theme_root)
     if ns.command == "check":
         return cmd_check(theme_root)
     if ns.command in ("query", "impact"):
-        print("chưa hỗ trợ ở P0")
-        return 0
+        return cmd_retrieve(theme_root, ns)
     return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        print(f'[FAIL] {exc}', file=sys.stderr)
+        sys.exit(2)

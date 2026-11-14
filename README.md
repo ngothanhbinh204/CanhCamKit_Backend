@@ -31,11 +31,24 @@ python canhcam-agents-kit/scripts/install_kit.py --upgrade
 |---|---|
 | `python canhcam-agents-kit/scripts/install_kit.py` | Cài đặt chuẩn (cả Antigravity & Codex), thêm `canhcam-agents-kit/`, `.ai-map/`, `CODEMAP.md` vào `.gitignore`, sinh `CODEMAP.md` + `.ai-map/` và quét `UI/*.html` |
 | `--tool antigravity` / `--tool codex` | Chỉ cài `.agents/agents/*.md` hoặc `.codex/agents/*.toml` |
-| `--upgrade` | Cập nhật Rule/Blueprint/Agents, nâng `Kit version` trong file state/handoff hiện có mà **không ghi đè** nội dung dự án, và build lại `CODEMAP` |
+| `--upgrade` | Cập nhật Rule/Blueprint/Agents và build lại `CODEMAP`; giữ nguyên từng byte của state/handoff hiện có, bao gồm version. Migration schema phải được review riêng |
 | `--dry-run` | Xem trước danh sách file sẽ `[CREATE]`, `[UPDATE]`, `[SKIP]` và `[WOULD BUILD] CODEMAP` mà không ghi xuống ổ cứng |
 | `--force-reset` | Khởi tạo lại toàn bộ từ đầu (kể cả `PROJECT_OVERRIDES.md` và `HANDOVER_TRACKING.md`) và build lại `CODEMAP` |
 | `python canhcam-agents-kit/scripts/codemap.py build` | Quét theme và ghi `CODEMAP.md`, `.ai-map/graph.json`, `.ai-map/meta.json`, `.ai-map/shards/*.md` (chỉ Main gọi) |
 | `python canhcam-agents-kit/scripts/codemap.py check` | Chỉ đọc: kiểm tra độ tươi của bản đồ theo SHA-256 (`exit 0` = tươi, `exit 1` = cũ, `exit 2` = chưa có map) |
+| `codemap.py query --page about --format json` | Exact target, dependency/consumer trực tiếp, ACF contract, component gợi ý theo marker và dependency chưa phân giải |
+| `codemap.py query --file template-parts/about/section-history.php` | Phạm vi component; mở source thật trước khi sửa |
+| `codemap.py query --field about_history_list.image` | Field theo key/path; dùng `group_about:about_history_list.image` để phân biệt group; `--group group_about` để chọn group |
+| `codemap.py impact --file acf-json/group_about.json` | Consumer của field thuộc JSON; cũng hỗ trợ `--file <PHP>` và `--field <key-or-path>` |
+| `--max-items 40` | Giới hạn tổng item (mặc định 40), ưu tiên target; JSON luôn nguyên vẹn, có `truncated`, `omitted_count`. Đây là giới hạn item, không phải token |
+
+Các lệnh query/impact chỉ đọc và kiểm tra freshness trước khi trả kết quả: stale trả exit 1, map thiếu/hỏng/tham số sai trả exit 2, target không tồn tại trả exit 3. Không tự rebuild. `--root <theme>` có thể đặt trước hoặc sau subcommand. Graph schema 2 giữ `confidence: static` cho compatibility và thêm `status: confirmed`; đây là bằng chứng cú pháp, không bảo đảm runtime. Page selector khớp slug tên file (`About.html`, `Done-About.html`, `template-about.php`, `page-about.php`); nếu tên không khớp, dùng `--file`.
+
+Upgrade an toàn: chạy `python canhcam-agents-kit/scripts/install_kit.py --upgrade --dry-run`, kiểm tra danh sách, rồi chạy lại bỏ `--dry-run`. Không dùng `--force-reset` nếu cần giữ dữ liệu. Map schema cũ cần main build lại; khác version handoff cần review migration riêng, không tự đổi số để bỏ gate. Build map lỗi trả exit khác 0 và báo cài đặt chưa hoàn tất (core có thể đã được copy). Kit vẫn giữ version 2.3.0 trong thay đổi này; không tự phát hành 2.4.0.
+
+Verifier ZTR-18 chỉ kiểm tra marker `<section>` literal ngoài PHP/comment/script. HTML được echo, DOM động, thứ tự/nesting, CSS và JS hooks cần runtime/browser; output ghi `[NOT RUN]` và không được dùng static PASS để đánh DONE cho kiểm tra runtime bắt buộc. Shards dùng giới hạn dòng mềm để giữ nguyên bảng; CODEMAP không bị cắt 150 dòng. Dùng query để giới hạn context.
+
+Kiểm thử bằng standard library: `python -B -m unittest discover -s tests -v`; validator: `python -B scripts/validate_kit.py`. Fixtures nằm trong thư mục tạm, không sửa theme khách hàng. Xem [báo cáo triển khai](tasks/OPTIMIZE_CONTEXT_V2.4_REPORT.md).
 
 ---
 
